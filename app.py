@@ -17,7 +17,7 @@ st.markdown("""
     .block-container { padding-top: 1rem; padding-bottom: 0rem; max-width: 100%; }
     header { visibility: hidden; }
     footer { visibility: hidden; }
-    div[data-testid="stExpander"] { border-radius: 10px; margin-top: 1rem; }
+    div[data-testid="stExpander"] { border-radius: 10px; margin-top: 0.75rem; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -51,9 +51,9 @@ with col_rate:
     refresh_rate_label = st.selectbox(
         "Auto Refresh",
         options=["1s", "2s", "5s", "10s", "30s", "1m"],
-        index=1,
+        index=4,  # Default set to 30s
         label_visibility="collapsed",
-        help="Telemetry polling frequency"
+        help="Telemetry polling frequency (Default: 30 seconds)"
     )
 
 with col_btn:
@@ -61,7 +61,7 @@ with col_btn:
 
 # Convert interval label to milliseconds
 rate_map = {"1s": 1000, "2s": 2000, "5s": 5000, "10s": 10000, "30s": 30000, "1m": 60000}
-poll_interval_ms = rate_map.get(refresh_rate_label, 2000)
+poll_interval_ms = rate_map.get(refresh_rate_label, 30000)
 
 # Resolve selected bus
 active_bus = typed_bus
@@ -96,7 +96,8 @@ def fetch_telemetry_packet(bus_no):
             timeout=5
         )
         res.raise_for_status()
-        data = json.loads(res.text.strip())
+        raw = res.text.strip()
+        data = json.loads(raw)
 
         if isinstance(data, list):
             for item in data:
@@ -143,7 +144,7 @@ if active_bus:
         )
         whatsapp_url = f"https://api.whatsapp.com/send?text={urllib.parse.quote(formatted_share_text)}"
 
-        # --- SECTION 1: CLEAN HEADER CARD (NO LEAKED RAW HTML CODE) ---
+        # --- SECTION 1: CLEAN HEADER CARD ---
         with st.container(border=True):
             top_col1, top_col2 = st.columns([3, 1])
             with top_col1:
@@ -171,7 +172,7 @@ if active_bus:
         with btn_c3:
             st.text_input("Copy Share Text", value=formatted_share_text.replace('\n', ' | '), label_visibility="collapsed")
 
-        # --- SECTION 2: LIVE NAVIGATION VIEW (SMOOTH IN-PLACE UPDATE) ---
+        # --- SECTION 2: COMPACT LIVE NAVIGATION VIEW ---
         st.write("")
         st.subheader("🗺️ Live Navigation View")
 
@@ -188,33 +189,50 @@ if active_bus:
                     margin: 0; padding: 0; width: 100%; height: 100%;
                     overflow: hidden; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
                 }}
-                #map {{ width: 100%; height: 560px; }}
+                #map {{
+                    width: 100%;
+                    height: 420px;
+                    border-radius: 8px;
+                }}
+                @media (max-width: 768px) {{
+                    #map {{
+                        height: 300px;
+                    }}
+                    .nav-hud {{
+                        padding: 6px 14px !important;
+                        gap: 12px !important;
+                        font-size: 11px !important;
+                    }}
+                    .hud-val {{
+                        font-size: 15px !important;
+                    }}
+                }}
                 
                 .nav-hud {{
-                    position: absolute; top: 12px; left: 50%; transform: translateX(-50%);
+                    position: absolute; top: 10px; left: 50%; transform: translateX(-50%);
                     z-index: 1000; background: rgba(15, 23, 42, 0.94); backdrop-filter: blur(8px);
-                    color: #fff; padding: 10px 24px; border-radius: 40px;
-                    box-shadow: 0 4px 20px rgba(0,0,0,0.45); display: flex; align-items: center;
-                    gap: 20px; border: 1px solid rgba(255,255,255,0.18); font-size: 13px;
+                    color: #fff; padding: 8px 18px; border-radius: 30px;
+                    box-shadow: 0 4px 16px rgba(0,0,0,0.4); display: flex; align-items: center;
+                    gap: 16px; border: 1px solid rgba(255,255,255,0.18); font-size: 12px;
                 }}
                 .hud-metric {{ display: flex; flex-direction: column; align-items: center; }}
-                .hud-val {{ font-size: 19px; font-weight: 700; color: #4ade80; }}
+                .hud-val {{ font-size: 17px; font-weight: 700; color: #4ade80; }}
                 .hud-lbl {{ font-size: 9px; text-transform: uppercase; color: #94a3b8; }}
                 .pulse-dot {{
-                    width: 10px; height: 10px; background: #4ade80; border-radius: 50%;
-                    display: inline-block; box-shadow: 0 0 10px #4ade80;
+                    width: 8px; height: 8px; background: #4ade80; border-radius: 50%;
+                    display: inline-block; box-shadow: 0 0 8px #4ade80;
                     animation: pulse 1.6s infinite;
                 }}
                 @keyframes pulse {{
                     0% {{ transform: scale(0.95); box-shadow: 0 0 0 0 rgba(74, 222, 128, 0.7); }}
-                    70% {{ transform: scale(1.15); box-shadow: 0 0 0 8px rgba(74, 222, 128, 0); }}
+                    70% {{ transform: scale(1.15); box-shadow: 0 0 0 6px rgba(74, 222, 128, 0); }}
                     100% {{ transform: scale(0.95); box-shadow: 0 0 0 0 rgba(74, 222, 128, 0); }}
                 }}
             </style>
         </head>
         <body>
             <div class="nav-hud">
-                <div style="display:flex; align-items:center; gap:8px;">
+                <div style="display:flex; align-items:center; gap:6px;">
                     <span class="pulse-dot"></span>
                     <span style="font-weight:700;">{active_bus}</span>
                 </div>
@@ -223,7 +241,7 @@ if active_bus:
                     <span class="hud-lbl">Speed (km/h)</span>
                 </div>
                 <div class="hud-metric">
-                    <span class="hud-val" id="hudStatus" style="color:#38bdf8; font-size:15px;">{status}</span>
+                    <span class="hud-val" id="hudStatus" style="color:#38bdf8; font-size:14px;">{status}</span>
                     <span class="hud-lbl">Status</span>
                 </div>
             </div>
@@ -248,19 +266,19 @@ if active_bus:
                         html: `
                             <div style="
                                 transform: rotate(${{heading}}deg);
-                                width: 44px; height: 44px; background: #2563eb;
-                                border: 3px solid #ffffff; border-radius: 50%;
+                                width: 36px; height: 36px; background: #2563eb;
+                                border: 2.5px solid #ffffff; border-radius: 50%;
                                 display: flex; align-items: center; justify-content: center;
-                                box-shadow: 0 4px 16px rgba(37,99,235,0.7);
+                                box-shadow: 0 3px 12px rgba(37,99,235,0.7);
                                 transition: transform 0.5s ease-out;
                             ">
-                                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#ffffff" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#ffffff" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
                                     <polygon points="12 2 19 21 12 17 5 21 12 2"></polygon>
                                 </svg>
                             </div>
                         `,
-                        iconSize: [44, 44],
-                        iconAnchor: [22, 22]
+                        iconSize: [36, 36],
+                        iconAnchor: [18, 18]
                     }});
                 }}
 
@@ -315,9 +333,9 @@ if active_bus:
         </body>
         </html>
         """
-        components.html(live_map_html, height=570, scrolling=False)
+        components.html(live_map_html, height=430, scrolling=False)
 
-        # --- SECTION 3: COMPLETE SENSOR & HARDWARE DIAGNOSTICS ---
+        # --- SECTION 3: SENSOR & HARDWARE DIAGNOSTICS ---
         with st.expander("⚙️ View Complete Device Telemetry & Sensor Details", expanded=False):
             d1, d2, d3 = st.columns(3)
             with d1:
