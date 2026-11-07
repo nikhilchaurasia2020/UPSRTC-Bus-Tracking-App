@@ -21,7 +21,7 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# --- 1. NETWORK HEADERS & APIS ---
+# --- 1. NETWORK CONSTANTS & APIS ---
 BASE_HEADERS = {
     "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
     "Referer": "https://margdarshi.upsrtcvlt.com/",
@@ -33,7 +33,7 @@ API_LIVE_URL = "https://margdarshi.upsrtcvlt.com/php/getGpsLiveData.php"
 API_SEARCH_URL = "https://margdarshi.upsrtcvlt.com/php/getRegNum.php"
 
 @st.cache_data(ttl=60, show_spinner=False)
-def fetch_matching_reg_numbers(query_str):
+def search_bus_registry(query_str):
     if not query_str or len(query_str) < 3:
         return []
     try:
@@ -44,7 +44,9 @@ def fetch_matching_reg_numbers(query_str):
             timeout=3
         )
         if res.ok:
-            return res.json()
+            data = res.json()
+            if isinstance(data, list):
+                return [str(x).strip().upper() for x in data]
     except Exception:
         pass
     return []
@@ -87,24 +89,16 @@ url_bus = url_params.get("bus", "").strip().upper()
 col_input, col_recent, col_rate, col_btn = st.columns([3.5, 2, 1.3, 1.2])
 
 with col_input:
-    # Seed options with URL bus, recent buses, and known active registrations
-    common_options = list(dict.fromkeys(
-        ([url_bus] if url_bus else []) + 
-        st.session_state.get("recent_buses", []) + 
-        ["UP32MN9122", "UP32MN9123", "UP32MN9124", "UP32MN9125", "UP78KT4613", "UP70GT8074"]
-    ))
-
-    selected_bus = st.selectbox(
-        "Bus Registration",
-        options=common_options,
-        index=0 if url_bus in common_options else 0,
-        placeholder="Type or select bus (e.g. UP32MN9123)...",
-        label_visibility="collapsed",
-        accept_custom_value=True  # Allows typing any custom/new registration directly into the bar
-    )
+    # Single clean text bar
+    input_bus = st.text_input(
+        "Bus Number Search",
+        value=url_bus,
+        placeholder="Search bus (e.g. UP32MN9123)...",
+        label_visibility="collapsed"
+    ).strip().upper()
 
 with col_recent:
-    history_options = ["🕒 Recent Searches..."] + [b for b in st.session_state["recent_buses"] if b != selected_bus]
+    history_options = ["🕒 Recent Searches..."] + [b for b in st.session_state["recent_buses"] if b != input_bus]
     selected_from_history = st.selectbox(
         "Recent Searches",
         options=history_options,
@@ -124,11 +118,11 @@ with col_btn:
     track_btn = st.button("🧭 Track Bus", use_container_width=True, type="primary")
 
 # Resolve selected bus
-active_bus = selected_bus
+active_bus = input_bus
 if selected_from_history != "🕒 Recent Searches..." and not track_btn:
     active_bus = selected_from_history
 
-# Update search history (preserve last 5 unique entries)
+# Update search history & URL parameter
 if active_bus:
     if active_bus not in st.session_state["recent_buses"]:
         st.session_state["recent_buses"].insert(0, active_bus)
@@ -139,10 +133,24 @@ if active_bus:
 # --- 3. AUTO-REFRESHING DASHBOARD FRAGMENT ---
 @st.fragment(run_every=refresh_rate_label)
 def render_live_dashboard(bus_no):
+    # Step 1: Validate bus registration against UPSRTC registry
+    registered_matches = search_bus_registry(bus_no)
+    
+    # If a specific registration was typed, check if it's registered
+    if registered_matches and bus_no not in registered_matches:
+        # Check if it's a prefix with matches
+        suggestion_str = ", ".join(registered_matches[:5])
+        st.info(f"🔍 Did you mean one of these buses? **{suggestion_str}**")
+        return
+    elif len(bus_no) >= 6 and not registered_matches:
+        st.error(f"❌ Bus **{bus_no}** not found in the UPSRTC registry. Please double-check the registration number.")
+        return
+
+    # Step 2: Fetch Telemetry
     packet = fetch_telemetry_packet(bus_no)
 
     if not packet or "error" in packet:
-        st.warning(f"No active telemetry received for **{bus_no}**. The bus might be offline or currently out of network coverage.")
+        st.warning(f"⚠️ No active live telemetry received for **{bus_no}**. The bus is registered, but currently offline or out of network coverage.")
         return
 
     lat = float(packet.get("latitude", 26.8467))
@@ -169,7 +177,7 @@ def render_live_dashboard(bus_no):
     )
     whatsapp_url = f"https://api.whatsapp.com/send?text={urllib.parse.quote(formatted_share_text)}"
 
-    # SECTION 1: CLEAN HEADER CARD
+    # SECTION 1: HEADER & METRICS
     with st.container(border=True):
         top_col1, top_col2 = st.columns([3, 1])
         with top_col1:
@@ -197,7 +205,7 @@ def render_live_dashboard(bus_no):
     with btn_c3:
         st.text_input("Copy Share Text", value=formatted_share_text.replace('\n', ' | '), label_visibility="collapsed")
 
-    # SECTION 2: COMPACT LIVE NAVIGATION VIEW
+    # SECTION 2: RESPONSIVE LIVE NAVIGATION VIEW
     st.write("")
     st.subheader("🗺️ Live Navigation View")
 
@@ -308,7 +316,7 @@ def render_live_dashboard(bus_no):
     """
     components.html(live_map_html, height=430, scrolling=False)
 
-    # SECTION 3: SENSOR & HARDWARE DIAGNOSTICS
+    # SECTION 3: HARDWARE & SENSOR DIAGNOSTICS
     with st.expander("⚙️ View Complete Device Telemetry & Sensor Details", expanded=False):
         d1, d2, d3 = st.columns(3)
         with d1:
@@ -333,11 +341,12 @@ def render_live_dashboard(bus_no):
             st.write(f"- **Firmware Version:** `{packet.get('firmwareVersion')}`")
             st.write(f"- **System Code:** `{packet.get('systemCodeNumber')}`")
             st.write(f"- **Frame Number:** `{packet.get('frameNumber')}`")
-            st.write(f"- **Packet Type:** `{packetType}`" if (packetType := packet.get('packetType')) else "- **Packet Type:** `N/A`")
+            packet_type = packet.get('packetType', 'N/A')
+            st.write(f"- **Packet Type:** `{packet_type}`")
 
 
 # --- 4. EXECUTION ENTRY POINT ---
 if active_bus:
     render_live_dashboard(active_bus)
 else:
-    st.info("Enter any UPSRTC bus registration number above (or pick from suggestions) to start tracking.")
+    st.info("Enter any UPSRTC bus registration number above to begin tracking.")
