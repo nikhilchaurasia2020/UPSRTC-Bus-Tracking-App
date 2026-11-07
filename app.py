@@ -11,7 +11,7 @@ st.set_page_config(
     initial_sidebar_state="collapsed"
 )
 
-# Custom Styling for clean top layout
+# Custom Styling
 st.markdown("""
 <style>
     .block-container { padding-top: 1rem; padding-bottom: 0rem; max-width: 100%; }
@@ -21,7 +21,7 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# --- 1. LOCAL STORAGE & SEARCH HISTORY (LAST 5 SEARCHES) ---
+# --- 1. LOCAL STORAGE & SEARCH HISTORY ---
 if "recent_buses" not in st.session_state:
     st.session_state["recent_buses"] = []
 
@@ -53,7 +53,7 @@ with col_rate:
         options=["1s", "2s", "5s", "10s", "30s", "1m"],
         index=1,
         label_visibility="collapsed",
-        help="Telemetry polling frequency (max 1 minute)"
+        help="Telemetry polling frequency"
     )
 
 with col_btn:
@@ -76,7 +76,7 @@ if active_bus:
     st.query_params["bus"] = active_bus
 
 
-# --- 2. INITIAL SERVER FETCH (BYPASSES CORS FOR FIRST LOAD & DIAGNOSTICS) ---
+# --- 2. SERVER FETCH (BYPASSES CORS) ---
 API_URL = "https://margdarshi.upsrtcvlt.com/php/getGpsLiveData.php"
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
@@ -96,8 +96,7 @@ def fetch_telemetry_packet(bus_no):
             timeout=5
         )
         res.raise_for_status()
-        raw = res.text.strip()
-        data = json.loads(raw)
+        data = json.loads(res.text.strip())
 
         if isinstance(data, list):
             for item in data:
@@ -134,7 +133,6 @@ if active_bus:
 
         google_maps_url = f"https://www.google.com/maps/search/?api=1&query={lat},{lon}"
         
-        # Formatted high-visibility message
         formatted_share_text = (
             f"🚌 *UPSRTC BUS UPDATE ({active_bus})*\n"
             f"📍 *Location:* {zone}\n"
@@ -145,38 +143,24 @@ if active_bus:
         )
         whatsapp_url = f"https://api.whatsapp.com/send?text={urllib.parse.quote(formatted_share_text)}"
 
-        # --- SECTION 1: PROMINENT SHARE CARD (RIGHT ON TOP, LARGE FONTS) ---
-        st.markdown(f"""
-        <div style="
-            background: linear-gradient(135deg, #1e293b, #0f172a);
-            border: 1px solid #334155;
-            border-radius: 12px;
-            padding: 16px 20px;
-            margin-top: 10px;
-            margin-bottom: 12px;
-            box-shadow: 0 4px 16px rgba(0,0,0,0.3);
-            color: #ffffff;
-        ">
-            <div style="display: flex; justify-content: space-between; align-items: flex-start; flex-wrap: wrap; gap: 10px;">
-                <div>
-                    <span style="background: #2563eb; color: #fff; font-size: 11px; font-weight: 700; padding: 3px 8px; border-radius: 6px; letter-spacing: 0.5px;">ACTIVE BUS</span>
-                    <h2 style="margin: 6px 0 2px 0; font-size: 24px; font-weight: 800; color: #f8fafc;">{active_bus}</h2>
-                    <p style="margin: 0; font-size: 16px; font-weight: 500; color: #38bdf8;">📍 {zone}</p>
-                </div>
-                <div style="text-align: right; font-size: 13px; color: #94a3b8;">
-                    <div>⏱️ <strong>Last Packet:</strong> <span style="color:#f1f5f9;">{pkt_time}</span></div>
-                    <div>🏢 <strong>Depot:</strong> <span style="color:#f1f5f9;">{depot}</span></div>
-                </div>
-            </div>
-            
-            <div style="display: flex; gap: 20px; margin-top: 14px; padding-top: 12px; border-top: 1px solid #334155; flex-wrap: wrap;">
-                <div><span style="color:#94a3b8; font-size:12px;">SPEED:</span> <strong style="font-size:16px; color:#4ade80;">{speed:.1f} km/h</strong></div>
-                <div><span style="color:#94a3b8; font-size:12px;">STATUS:</span> <strong style="font-size:16px; color:#38bdf8;">{status}</strong></div>
-                <div><span style="color:#94a3b8; font-size:12px;">IGNITION:</span> <strong style="font-size:16px; color:{'#4ade80' if ignition == 'ON' else '#f87171'};">{ignition}</strong></div>
-                <div><span style="color:#94a3b8; font-size:12px;">SATELLITES:</span> <strong style="font-size:16px; color:#f8fafc;">{satellites}</strong></div>
-            </div>
-        </div>
-        """, unsafe_allow_html=True)
+        # --- SECTION 1: CLEAN HEADER CARD (NO LEAKED RAW HTML CODE) ---
+        with st.container(border=True):
+            top_col1, top_col2 = st.columns([3, 1])
+            with top_col1:
+                st.caption("🟢 ACTIVE VEHICLE")
+                st.subheader(f"🚌 {active_bus}")
+                st.markdown(f"📍 **Location:** `{zone}`")
+            with top_col2:
+                st.caption(f"🏢 **Depot:** {depot}")
+                st.caption(f"🕒 **Last Packet:** `{pkt_time}`")
+
+            # Metrics Row
+            m1, m2, m3, m4, m5 = st.columns(5)
+            m1.metric("Live Speed", f"{speed:.1f} km/h")
+            m2.metric("Status", status)
+            m3.metric("Ignition", ignition)
+            m4.metric("Heading", f"{heading:.1f}°")
+            m5.metric("Satellites", satellites)
 
         # Quick action buttons row
         btn_c1, btn_c2, btn_c3 = st.columns([1.5, 1.5, 3])
@@ -185,10 +169,9 @@ if active_bus:
         with btn_c2:
             st.link_button("🗺️ Open Google Maps", google_maps_url, use_container_width=True)
         with btn_c3:
-            # Inline copy box
             st.text_input("Copy Share Text", value=formatted_share_text.replace('\n', ' | '), label_visibility="collapsed")
 
-        # --- SECTION 2: LIVE NAVIGATION VIEW (SMOOTH IN-PLACE UPDATE, NO PAGE RELOAD) ---
+        # --- SECTION 2: LIVE NAVIGATION VIEW (SMOOTH IN-PLACE UPDATE) ---
         st.write("")
         st.subheader("🗺️ Live Navigation View")
 
@@ -251,7 +234,6 @@ if active_bus:
                 const BUS_REG = "{active_bus}";
                 const POLL_INTERVAL = {poll_interval_ms};
 
-                // Initialize Map once (DOM is persistent, zero reload flicker)
                 const map = L.map('map', {{ zoomControl: false }}).setView([{lat}, {lon}], 15);
                 
                 L.tileLayer('https://tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png', {{
@@ -285,7 +267,6 @@ if active_bus:
                 let marker = L.marker([{lat}, {lon}], {{ icon: createPointer({heading}) }}).addTo(map);
                 let trail = L.polyline([[{lat}, {lon}]], {{ color: '#2563eb', weight: 4, opacity: 0.85 }}).addTo(map);
 
-                // Polling loop inside browser (never refreshes the page)
                 async function syncTelemetry() {{
                     try {{
                         const body = new URLSearchParams();
@@ -315,11 +296,9 @@ if active_bus:
                             const newHeading = parseFloat(bus.heading || 0);
                             const newStatus = (bus.vehicle_status || 'LIVE').toUpperCase();
 
-                            // Update HUD elements directly
                             document.getElementById('hudSpeed').innerText = newSpeed;
                             document.getElementById('hudStatus').innerText = newStatus;
 
-                            // Update marker position and map tracking
                             const nextPos = [newLat, newLng];
                             marker.setLatLng(nextPos);
                             marker.setIcon(createPointer(newHeading));
@@ -327,7 +306,7 @@ if active_bus:
                             map.panTo(nextPos, {{ animate: true, duration: 0.8 }});
                         }}
                     }} catch (e) {{
-                        console.log("Telemetry ping failed (handled silently):", e);
+                        console.log("Telemetry ping handled silently:", e);
                     }}
                 }}
 
@@ -338,7 +317,7 @@ if active_bus:
         """
         components.html(live_map_html, height=570, scrolling=False)
 
-        # --- SECTION 3: ALL RAW HARDWARE & SENSOR DIAGNOSTICS ---
+        # --- SECTION 3: COMPLETE SENSOR & HARDWARE DIAGNOSTICS ---
         with st.expander("⚙️ View Complete Device Telemetry & Sensor Details", expanded=False):
             d1, d2, d3 = st.columns(3)
             with d1:
@@ -363,7 +342,7 @@ if active_bus:
                 st.write(f"- **Firmware Version:** `{initial_packet.get('firmwareVersion')}`")
                 st.write(f"- **System Code:** `{initial_packet.get('systemCodeNumber')}`")
                 st.write(f"- **Frame Number:** `{initial_packet.get('frameNumber')}`")
-                st.write(f"- **Packet Type:** `{initial_packet.get('packetType')}`")
+                st.write(f"- **Packet Type:** `{packetType}`" if (packetType := initial_packet.get('packetType')) else "- **Packet Type:** `N/A`")
 
 else:
     st.info("Enter any UPSRTC bus registration number above (or pick from your recent searches) to start navigation.")
