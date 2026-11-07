@@ -1,243 +1,307 @@
 import streamlit as st
-import requests
-import json
-import pandas as pd
-import pydeck as pdk
-from datetime import datetime
+import streamlit.components.v1 as components
 
 st.set_page_config(
-    page_title="UPSRTC Bus Tracker",
-    page_icon="🚌",
+    page_title="UPSRTC Live Navigation Tracker",
+    page_icon="🧭",
     layout="wide",
     initial_sidebar_state="collapsed"
 )
 
-# --- 1. LOCAL STORAGE JS INTEGRATION ---
-def render_local_storage_manager():
-    storage_component = """
-    <script>
-    (function() {
-        const savedBus = localStorage.getItem("upsrtc_last_bus");
-        if (savedBus) {
-            const currentQuery = new URLSearchParams(window.location.search).get("bus");
-            if (!currentQuery) {
-                const url = new URL(window.location);
-                url.searchParams.set("bus", savedBus);
-                window.location.replace(url.toString());
-            }
-        }
-    })();
-    </script>
-    """
-    st.components.v1.html(storage_component, height=0)
+# Custom minimal styling
+st.markdown("""
+<style>
+    .block-container { padding-top: 1.5rem; padding-bottom: 0rem; max-width: 100%; }
+    header { visibility: hidden; }
+    footer { visibility: hidden; }
+</style>
+""", unsafe_allow_html=True)
 
-render_local_storage_manager()
-
-# Read pre-filled query param
+# 1. Read pre-filled query param
 url_params = st.query_params
 default_bus = url_params.get("bus", "")
 
-# --- 2. SEARCH & HEADER ---
-st.title("🚌 UPSRTC Real-Time Bus Tracker")
-
-col_search, col_rate = st.columns([3, 1])
+# 2. Search Bar
+col_search, col_action = st.columns([4, 1])
 with col_search:
     bus_input = st.text_input(
-        "Enter Bus Registration Number",
+        "Enter UPSRTC Bus Registration Number",
         value=default_bus,
         placeholder="e.g. UP32MN9123, UP78KT4613",
-        help="Saves automatically in browser storage."
+        label_visibility="collapsed"
     ).strip().upper()
 
-with col_rate:
-    refresh_rate = st.selectbox(
-        "Refresh Interval",
-        options=["1s", "2s", "5s", "10s"],
-        index=0,
-        help="Polling interval for fetching updated telemetry"
-    )
+with col_action:
+    track_btn = st.button("🧭 Start Navigation", use_container_width=True, type="primary")
 
-# Save bus to local storage when changed
 if bus_input:
     st.query_params["bus"] = bus_input
-    st.components.v1.html(
-        f"<script>localStorage.setItem('upsrtc_last_bus', '{bus_input}');</script>",
-        height=0
-    )
 
-# --- 3. TELEMETRY NETWORK FETCHER ---
-API_URL = "https://margdarshi.upsrtcvlt.com/php/getGpsLiveData.php"
-HEADERS = {
-    "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-    "Referer": "https://margdarshi.upsrtcvlt.com/",
-    "Origin": "https://margdarshi.upsrtcvlt.com",
-    "Accept": "application/json, text/plain, */*"
-}
+# 3. Client-Side Live Navigation Engine (Zero-Flicker Leaflet.js)
+leaflet_navigation_html = f"""
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <style>
+        body, html {{
+            margin: 0;
+            padding: 0;
+            width: 100%;
+            height: 100%;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            overflow: hidden;
+            background: #111;
+        }}
+        #map {{
+            width: 100%;
+            height: 100vh;
+            z-index: 1;
+        }}
+        /* Floating Navigation HUD */
+        .nav-hud {{
+            position: absolute;
+            top: 15px;
+            left: 50%;
+            transform: translateX(-50%);
+            z-index: 1000;
+            background: rgba(18, 20, 24, 0.92);
+            backdrop-filter: blur(8px);
+            color: #fff;
+            padding: 12px 24px;
+            border-radius: 35px;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.4);
+            display: flex;
+            align-items: center;
+            gap: 25px;
+            border: 1px solid rgba(255,255,255,0.15);
+            font-size: 14px;
+        }}
+        .hud-metric {{
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }}
+        .hud-val {{
+            font-size: 20px;
+            font-weight: 700;
+            color: #2ecc71;
+        }}
+        .hud-lbl {{
+            font-size: 10px;
+            text-transform: uppercase;
+            color: #aaa;
+            letter-spacing: 0.5px;
+        }}
+        .pulse-dot {{
+            width: 10px;
+            height: 10px;
+            background: #2ecc71;
+            border-radius: 50%;
+            display: inline-block;
+            box-shadow: 0 0 10px #2ecc71;
+            animation: pulse 1.5s infinite;
+        }}
+        @keyframes pulse {{
+            0% {{ transform: scale(0.95); box-shadow: 0 0 0 0 rgba(46, 204, 113, 0.7); }}
+            70% {{ transform: scale(1.1); box-shadow: 0 0 0 8px rgba(46, 204, 113, 0); }}
+            100% {{ transform: scale(0.95); box-shadow: 0 0 0 0 rgba(46, 204, 113, 0); }}
+        }}
+        /* Custom Smooth Bus Marker */
+        .bus-marker-icon {{
+            transition: transform 0.8s linear, top 0.8s linear, left 0.8s linear;
+        }}
+        .floating-info {{
+            position: absolute;
+            bottom: 20px;
+            left: 20px;
+            right: 20px;
+            z-index: 1000;
+            background: rgba(18, 20, 24, 0.92);
+            backdrop-filter: blur(8px);
+            color: #fff;
+            padding: 12px 20px;
+            border-radius: 12px;
+            font-size: 13px;
+            border: 1px solid rgba(255,255,255,0.15);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }}
+    </style>
+</head>
+<body>
 
-def fetch_telemetry_live(target_bus):
-    try:
-        response = requests.post(
-            API_URL,
-            headers=HEADERS,
-            data={"regNo": target_bus},
-            timeout=3
-        )
-        response.raise_for_status()
-        raw = response.text.strip()
-        data = json.loads(raw)
+    <div class="nav-hud">
+        <div style="display:flex; align-items:center; gap:8px;">
+            <span class="pulse-dot"></span>
+            <span id="busTag" style="font-weight:600;">{bus_input if bus_input else "NO BUS SELECTED"}</span>
+        </div>
+        <div class="hud-metric">
+            <span class="hud-val" id="speedVal">--</span>
+            <span class="hud-lbl">Speed (km/h)</span>
+        </div>
+        <div class="hud-metric">
+            <span class="hud-val" id="statusVal" style="color:#3498db; font-size:16px;">--</span>
+            <span class="hud-lbl">Status</span>
+        </div>
+    </div>
 
-        if isinstance(data, list):
-            for item in data:
-                reg = str(item.get("regNum") or item.get("RegNo") or item.get("bus_id", "")).upper()
-                if reg == target_bus:
-                    return item
-            if len(data) > 0 and ("latitude" in data[0] or "regNum" in data[0]):
-                return data[0]
-            return None
-        elif isinstance(data, dict):
-            return data
-    except Exception as e:
-        return {"error": str(e)}
+    <div id="map"></div>
 
-# --- 4. REAL-TIME AUTO-REFRESH FRAGMENT ---
-# This runs strictly inside this fragment every second without reloading the search bar or entire DOM
-@st.fragment(run_every=refresh_rate)
-def render_live_dashboard(target_bus):
-    bus_data = fetch_telemetry_live(target_bus)
+    <div class="floating-info">
+        <div>
+            <strong>📍 Location:</strong> <span id="zoneVal">Searching telemetry...</span>
+        </div>
+        <div style="color:#aaa;">
+            <strong>Depot:</strong> <span id="depotVal">--</span> | <strong>Last Packet:</strong> <span id="timeVal">--</span>
+        </div>
+    </div>
 
-    if not bus_data:
-        st.warning(f"No active telemetry received for **{target_bus}**. The bus might be offline or currently out of signal.")
-        return
-    if "error" in bus_data:
-        st.error(f"Network error: {bus_data['error']}")
-        return
+    <script>
+        const BUS_NO = "{bus_input}".trim().toUpperCase();
 
-    # Extract coordinates & attributes
-    lat = float(bus_data.get("latitude", 0.0))
-    lon = float(bus_data.get("longitude", 0.0))
-    speed = float(bus_data.get("speed", 0.0))
-    heading = float(bus_data.get("heading", 0.0))
-    altitude = bus_data.get("altitude", "N/A")
-    satellites = bus_data.get("numSatellites", "N/A")
-    ignition = "ON" if bus_data.get("ignition") == 1 else "OFF"
-    status = str(bus_data.get("vehicle_status", "unknown")).upper()
-    zone = bus_data.get("zone_name", "Location Unknown")
-    depot = bus_data.get("depot_name", "N/A")
-    home_depot_id = bus_data.get("home_depot", "N/A")
-    main_v = bus_data.get("mainInputVoltage", "N/A")
-    int_v = bus_data.get("internalBatteryVoltage", "N/A")
-    distance = bus_data.get("distance", "N/A")
-    received_time = bus_data.get("receivedTime", bus_data.get("timestamp", "N/A"))
-    vendor = bus_data.get("vendorId", "N/A")
-    firmware = bus_data.get("firmwareVersion", "N/A")
+        // Save bus to local storage
+        if (BUS_NO) {{
+            localStorage.setItem("upsrtc_last_bus", BUS_NO);
+        }} else {{
+            const saved = localStorage.getItem("upsrtc_last_bus");
+            if (saved) {{
+                const url = new URL(window.parent.location);
+                url.searchParams.set("bus", saved);
+                window.parent.location.replace(url.toString());
+            }}
+        }}
 
-    # Live connection header
-    now_str = datetime.now().strftime("%H:%M:%S")
-    st.markdown(
-        f"🟢 **LIVE PING** `{now_str}` | **Bus Status:** `{status}` | **Packet Time:** `{received_time}`"
-    )
+        // Initialize Map
+        const map = L.map('map', {{
+            zoomControl: false,
+            attributionControl: false
+        }}).setView([26.8467, 80.9462], 14); // Default near UP
 
-    st.success(f"📍 **Current Location:** {zone}")
+        L.control.zoom({{ position: 'bottomright' }}).addTo(map);
 
-    # Driving Metrics KPIs
-    k1, k2, k3, k4, k5 = st.columns(5)
-    k1.metric("Live Speed", f"{speed:.1f} km/h")
-    k2.metric("Ignition", ignition)
-    k3.metric("Depot", depot)
-    k4.metric("Heading", f"{heading:.1f}°")
-    k5.metric("GPS Satellites", satellites)
+        // Vector/Raster Tiles (CartoDB Voyager - Clean Google Maps aesthetic)
+        L.tileLayer('https://{{s}}.basemaps.cartocdn.com/rastertiles/voyager/{{z}}/{{x}}/{{y}}{{r}}.png', {{
+            maxZoom: 19
+        }}).addTo(map);
 
-    # Live Map + Info Block
-    map_col, info_col = st.columns([2, 1])
+        // Custom Bus SVG Marker with Heading Arrow
+        function createBusIcon(heading) {{
+            return L.divIcon({{
+                className: 'bus-marker-icon',
+                html: `
+                    <div style="
+                        transform: rotate(${{heading}}deg);
+                        width: 44px;
+                        height: 44px;
+                        background: #007AFF;
+                        border: 3px solid #ffffff;
+                        border-radius: 50%;
+                        display: flex;
+                        align-items: center;
+                        justify-content: center;
+                        box-shadow: 0 4px 15px rgba(0,122,255,0.6);
+                    ">
+                        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#ffffff" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                            <polygon points="12 2 19 21 12 17 5 21 12 2"></polygon>
+                        </svg>
+                    </div>
+                `,
+                iconSize: [44, 44],
+                iconAnchor: [22, 22]
+            }});
+        }}
 
-    with map_col:
-        st.subheader("🗺️ Live GPS Position")
-        if lat != 0.0 and lon != 0.0:
-            df_coords = pd.DataFrame([{
-                "lat": lat,
-                "lon": lon,
-                "speed": speed,
-                "label": f"{target_bus} ({speed} km/h)"
-            }])
+        let busMarker = null;
+        let polyline = L.polyline([], {{ color: '#007AFF', weight: 4, opacity: 0.7 }}).addTo(map);
+        let isFirstFix = true;
 
-            # PyDeck configured with free OpenStreetMap Carto raster tiles (no API keys required)
-            osm_tile_layer = pdk.Layer(
-                "BitmapLayer",
-                data=None,
-                image="https://tile.openstreetmap.org/{z}/{x}/{y}.png",
-            )
+        // Smooth telemetry loop directly from Margdarshi API
+        async function fetchLiveTelemetry() {{
+            if (!BUS_NO) return;
 
-            marker_layer = pdk.Layer(
-                "ScatterplotLayer",
-                data=df_coords,
-                get_position="[lon, lat]",
-                get_fill_color="[46, 204, 113, 220]" if speed > 0 else "[235, 64, 52, 220]",
-                get_radius=120,
-                pickable=True
-            )
+            try {{
+                const formData = new URLSearchParams();
+                formData.append('regNo', BUS_NO);
 
-            text_layer = pdk.Layer(
-                "TextLayer",
-                data=df_coords,
-                get_position="[lon, lat]",
-                get_text="label",
-                get_size=16,
-                get_color=[0, 0, 0, 255],
-                get_alignment_baseline="'bottom'",
-                get_pixel_offset=[0, -15]
-            )
+                const res = await fetch('https://margdarshi.upsrtcvlt.com/php/getGpsLiveData.php', {{
+                    method: 'POST',
+                    headers: {{
+                        'Content-Type': 'application/x-www-form-urlencoded'
+                    }},
+                    body: formData
+                }});
 
-            view_state = pdk.ViewState(
-                latitude=lat,
-                longitude=lon,
-                zoom=14,
-                pitch=0
-            )
+                const data = await res.json();
+                let bus = null;
 
-            st.pydeck_chart(
-                pdk.Deck(
-                    layers=[marker_layer, text_layer],
-                    initial_view_state=view_state,
-                    tooltip={"text": "{label}\nLat: {lat}, Lon: {lon}"}
-                )
-            )
-        else:
-            st.warning("Coordinates unavailable in this frame.")
+                if (Array.isArray(data)) {{
+                    bus = data.find(item => 
+                        (item.regNum && item.regNum.toUpperCase() === BUS_NO) ||
+                        (item.RegNo && item.RegNo.toUpperCase() === BUS_NO) ||
+                        (item.bus_id && item.bus_id.toUpperCase() === BUS_NO)
+                    );
+                    if (!bus && data.length > 0) bus = data[0];
+                }} else if (typeof data === 'object') {{
+                    bus = data;
+                }}
 
-    with info_col:
-        st.subheader("📋 Shareable Update")
-        maps_link = f"https://www.google.com/maps/search/?api=1&query={lat},{lon}"
-        share_payload = (
-            f"🚌 *UPSRTC Bus Update ({target_bus})*\n"
-            f"📍 *Location:* {zone}\n"
-            f"⚡ *Speed:* {speed} km/h | Status: {status}\n"
-            f"🔑 *Ignition:* {ignition}\n"
-            f"🏢 *Depot:* {depot}\n"
-            f"🕒 *Updated:* {received_time}\n"
-            f"🗺️ *Live Map:* {maps_link}"
-        )
-        st.text_area("Live update text (copy & paste):", value=share_payload, height=180)
-        st.link_button("🌐 Open in Google Maps", maps_link, use_container_width=True)
+                if (bus && bus.latitude && bus.longitude) {{
+                    const lat = parseFloat(bus.latitude);
+                    const lng = parseFloat(bus.longitude);
+                    const speed = parseFloat(bus.speed || 0).toFixed(1);
+                    const heading = parseFloat(bus.heading || 0);
+                    const status = (bus.vehicle_status || 'LIVE').toUpperCase();
+                    const zone = bus.zone_name || 'En route';
+                    const depot = bus.depot_name || '--';
+                    const time = bus.receivedTime || bus.timestamp || '--';
 
-    # Diagnostic metadata
-    with st.expander("⚙️ Hardware Diagnostics & Packet Details"):
-        d1, d2, d3 = st.columns(3)
-        with d1:
-            st.write(f"- **Satellites:** `{satellites}`")
-            st.write(f"- **Altitude:** `{altitude} m`")
-            st.write(f"- **Distance Traveled:** `{distance} m`")
-        with d2:
-            st.write(f"- **Main Voltage:** `{main_v} V`")
-            st.write(f"- **Battery Voltage:** `{int_v} V`")
-            st.write(f"- **Main Power:** `{'Connected' if bus_data.get('mainPowerStatus') == 1 else 'Disconnected'}`")
-        with d3:
-            st.write(f"- **Vendor ID:** `{vendor}`")
-            st.write(f"- **Firmware:** `{firmware}`")
-            st.write(f"- **Depot Code:** `{home_depot_id}`")
+                    // Update HUD text without touching DOM map
+                    document.getElementById('speedVal').innerText = speed;
+                    document.getElementById('statusVal').innerText = status;
+                    document.getElementById('zoneVal').innerText = zone;
+                    document.getElementById('depotVal').innerText = depot;
+                    document.getElementById('timeVal').innerText = time;
 
+                    const newLatLng = [lat, lng];
 
-# --- 5. RUN DASHBOARD ---
+                    if (!busMarker) {{
+                        busMarker = L.marker(newLatLng, {{ icon: createBusIcon(heading) }}).addTo(map);
+                    }} else {{
+                        // Smoothly animate marker to new position
+                        busMarker.setLatLng(newLatLng);
+                        busMarker.setIcon(createBusIcon(heading));
+                    }}
+
+                    // Append to route trail
+                    polyline.addLatLng(newLatLng);
+
+                    // Smooth pan map along with bus (navigation mode)
+                    if (isFirstFix) {{
+                        map.setView(newLatLng, 15);
+                        isFirstFix = false;
+                    }} else {{
+                        map.panTo(newLatLng, {{ animate: true, duration: 0.8 }});
+                    }}
+                }}
+            }} catch (err) {{
+                console.error("Telemetry fetch error:", err);
+            }}
+        }}
+
+        // Poll every 1.5 seconds for true smooth navigation
+        fetchLiveTelemetry();
+        setInterval(fetchLiveTelemetry, 1500);
+    </script>
+</body>
+</html>
+"""
+
 if bus_input:
-    render_live_dashboard(bus_input)
+    components.html(leaflet_navigation_html, height=720, scrolling=False)
 else:
-    st.info("Enter any UPSRTC bus registration number above to begin real-time 1-second tracking.")
+    st.info("Enter a bus number above (e.g. `UP32MN9123`) to launch real-time turn-by-turn tracking.")
