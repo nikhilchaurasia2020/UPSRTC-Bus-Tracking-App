@@ -87,25 +87,21 @@ url_bus = url_params.get("bus", "").strip().upper()
 col_input, col_recent, col_rate, col_btn = st.columns([3.5, 2, 1.3, 1.2])
 
 with col_input:
-    user_query = st.text_input(
-        "Bus Number Search",
-        value=url_bus,
-        placeholder="Type bus number (e.g. UP32MN91)",
-        label_visibility="collapsed"
-    ).strip().upper()
+    # Seed options with URL bus, recent buses, and known active registrations
+    common_options = list(dict.fromkeys(
+        ([url_bus] if url_bus else []) + 
+        st.session_state.get("recent_buses", []) + 
+        ["UP32MN9122", "UP32MN9123", "UP32MN9124", "UP32MN9125", "UP78KT4613", "UP70GT8074"]
+    ))
 
-    # Dynamic suggestions fetched as user types
-    suggestions = fetch_matching_reg_numbers(user_query) if user_query else []
-    
-    if suggestions:
-        selected_bus = st.selectbox(
-            "Select Matching Bus",
-            options=suggestions,
-            index=suggestions.index(user_query) if user_query in suggestions else 0,
-            label_visibility="collapsed"
-        )
-    else:
-        selected_bus = user_query
+    selected_bus = st.selectbox(
+        "Bus Registration",
+        options=common_options,
+        index=0 if url_bus in common_options else 0,
+        placeholder="Type or select bus (e.g. UP32MN9123)...",
+        label_visibility="collapsed",
+        accept_custom_value=True  # Allows typing any custom/new registration directly into the bar
+    )
 
 with col_recent:
     history_options = ["🕒 Recent Searches..."] + [b for b in st.session_state["recent_buses"] if b != selected_bus]
